@@ -229,6 +229,7 @@ html{-webkit-text-size-adjust:100%}
   <button onclick="showTab('effectsize')">4. Effect sizes</button>
   <button onclick="showTab('hypothesis')">5. Hypothesis tests</button>
   <button onclick="showTab('sdband')">6. SD band graph</button>
+  <button onclick="showTab('meta')">7. Meta-analysis (Tau-U)</button>
 </div>
 
 <div class="main">
@@ -435,6 +436,27 @@ html{-webkit-text-size-adjust:100%}
   </div>
 </div>
 
+<div id="tab-meta" style="display:none">
+  <div class="panel"><div class="ph">Meta-analysis: aggregated Tau-U across cases</div>
+    <div class="pb">
+      <div class="info" style="margin-bottom:10px">Combine the Tau-U effect sizes from several A-B cases (for example, every client in a caseload) into one pooled estimate with a forest plot. Enter one row per case: a label, the baseline (A) and intervention (B) sample sizes, and that case's Tau-U (from the Effect sizes tab). Because it works from summary numbers, you can include cases you analyzed separately.</div>
+      <div class="wbox" style="background:#FFF6E9;border-left:4px solid #D79A2B;padding:11px 13px;border-radius:7px;margin-bottom:13px;font-size:12px;color:#5c4a2a;line-height:1.5"><strong>Read this before interpreting.</strong> A pooled Tau-U is a descriptive summary, not a definitive population effect. It assumes the cases are independent, and non-overlap indices are bounded (so ceiling effects can pull the pooled value). Always read the pooled number together with the spread of cases in the forest plot &mdash; wide scatter means the intervention worked unevenly, which a single number hides. Pooling treats each case's Tau-U as the between-phase (A vs B) comparison, weighted by its number of comparisons.</div>
+      <table class="dt" id="meta-input" style="max-width:660px"><thead><tr><th>Case label</th><th>Baseline n (A)</th><th>Intervention n (B)</th><th>Tau-U</th><th></th></tr></thead><tbody id="meta-rows"></tbody></table>
+      <div style="margin-top:11px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="metaAddRow()">+ Add case</button>
+        <button class="btn primary" onclick="renderMeta()">Compute pooled Tau-U</button>
+        <button class="btn" onclick="metaClear()">Clear</button>
+      </div>
+      <div id="meta-results" style="margin-top:16px"></div>
+      <div id="meta-forest-wrap" style="display:none;margin-top:10px">
+        <div class="fg" style="margin-bottom:8px"><div class="fi"><label>Forest plot title</label><input type="text" id="meta-title" value="Aggregated Tau-U across cases" style="width:340px" oninput="if(typeof metaLast!=='undefined'&&metaLast)drawForest(metaLast.rows,metaLast.pooled)"></div></div>
+        <div class="cc" style="height:auto;width:100%"><canvas id="meta-forest"></canvas></div>
+        <div style="margin-top:8px;display:flex;gap:6px;align-items:center"><select id="fmt-meta" style="border:0.5px solid #c2ccd1;border-radius:8px;padding:5px 8px;font-size:12px;font-family:inherit;background:#fff"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WEBP</option><option value="pdf">PDF</option></select><button class="btn amber" onclick="downloadChart('meta-forest','SSD_ForestPlot','fmt-meta')">&darr; Export forest plot</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </div><!-- end .main -->
 
 <footer class="app-footer">
@@ -510,7 +532,8 @@ function selectSheet(name){
 // =====================================================================
 function showTab(t){
   document.querySelectorAll('.nav button').forEach(function(b){b.classList.toggle('active',b.getAttribute('onclick').indexOf("'"+t+"'")>=0);});
-  ['welcome','data','descriptive','autocorr','effectsize','hypothesis','sdband'].forEach(function(id){document.getElementById('tab-'+id).style.display=(id===t)?'':'none';});
+  ['welcome','data','descriptive','autocorr','effectsize','hypothesis','sdband','meta'].forEach(function(id){document.getElementById('tab-'+id).style.display=(id===t)?'':'none';});
+  if(t==='meta')metaInit();
   if(phaseOrder.length){
     if(t==='descriptive'){renderDescriptive();setTimeout(function(){document.getElementById('linegraph-panel').style.display='';document.getElementById('boxplot-panel').style.display='';renderLineGraph();renderBoxPlot();},50);}
     if(t==='autocorr')renderAutocorr();
@@ -805,6 +828,7 @@ function renderDescriptive(){
   var html='';
   phaseOrder.forEach(function(p){
     var v=vals(p);if(!v.length)return;
+    var sv=v.slice().sort(function(a,b){return a-b;});var q1=sv[Math.floor(sv.length*0.25)],q3=sv[Math.floor(sv.length*0.75)],iqr=q3-q1;
     html+='<div class="ps"><div class="ph-hdr"><span style="font-size:13px;font-weight:500;color:#0b4c50">Phase '+(phaseLabelMap[p]||p)+'</span><span style="font-size:10px;color:#64727a">(n = '+v.length+')</span></div>'
       +'<div class="sg">'
       +'<div class="sc"><div class="lbl">Mean</div><div class="val">'+mean(v).toFixed(2)+'</div></div>'
@@ -814,6 +838,9 @@ function renderDescriptive(){
       +'<div class="sc"><div class="lbl">Min</div><div class="val">'+Math.min.apply(null,v).toFixed(2)+'</div></div>'
       +'<div class="sc"><div class="lbl">Max</div><div class="val">'+Math.max.apply(null,v).toFixed(2)+'</div></div>'
       +'<div class="sc"><div class="lbl">Range</div><div class="val">'+(Math.max.apply(null,v)-Math.min.apply(null,v)).toFixed(2)+'</div></div>'
+      +'<div class="sc"><div class="lbl">Q1</div><div class="val">'+q1.toFixed(2)+'</div></div>'
+      +'<div class="sc"><div class="lbl">Q3</div><div class="val">'+q3.toFixed(2)+'</div></div>'
+      +'<div class="sc"><div class="lbl">IQR</div><div class="val">'+iqr.toFixed(2)+'</div></div>'
       +'<div class="sc"><div class="lbl">n</div><div class="val">'+v.length+'</div></div>'
       +'</div></div>';
   });
@@ -1417,6 +1444,94 @@ function buildPdfFromJpeg(b64,w,h){
 }
 
 /* chartjs-plugin-annotation is inlined in <head>; no external load needed */
+// =====================================================================
+// META-ANALYSIS: aggregated Tau-U + forest plot
+// Pools the between-phase Tau-U across cases (Parker et al., 2011):
+//   pooled Tau-U = sum(S_i) / sum(pairs_i),  pairs_i = nA_i * nB_i,
+//   S_i = tau_i * pairs_i,  Var(S_i) = nA_i*nB_i*(nA_i+nB_i+1)/3
+//   (same variance basis as the single-case Tau-U on the Effect sizes tab)
+// =====================================================================
+var metaLast=null;
+function metaInit(){var tb=document.getElementById('meta-rows');if(tb&&tb.children.length===0){metaAddRow();metaAddRow();metaAddRow();}}
+function metaAddRow(label,na,nb,tau){
+  var tb=document.getElementById('meta-rows');if(!tb)return;
+  var st='border:0.5px solid #c2ccd1;border-radius:6px;padding:4px 6px;font-size:12px;font-family:inherit';
+  var tr=document.createElement('tr');
+  tr.innerHTML='<td><input type="text" class="m-lab" value="'+(label!=null?label:('Case '+(tb.children.length+1)))+'" style="width:130px;'+st+'"></td>'
+    +'<td><input type="number" class="m-na" min="2" value="'+(na!=null?na:'')+'" style="width:80px;'+st+'"></td>'
+    +'<td><input type="number" class="m-nb" min="2" value="'+(nb!=null?nb:'')+'" style="width:95px;'+st+'"></td>'
+    +'<td><input type="number" class="m-tau" step="0.001" min="-1" max="1" value="'+(tau!=null?tau:'')+'" style="width:80px;'+st+'"></td>'
+    +'<td><button class="btn" style="padding:3px 9px" title="Remove" onclick="this.closest(\'tr\').remove()">&times;</button></td>';
+  tb.appendChild(tr);
+}
+function metaClear(){var tb=document.getElementById('meta-rows');if(tb)tb.innerHTML='';var o=document.getElementById('meta-results');if(o)o.innerHTML='';document.getElementById('meta-forest-wrap').style.display='none';metaAddRow();}
+function metaReadRows(){
+  var valid=[],skipped=[];document.querySelectorAll('#meta-rows tr').forEach(function(tr){
+    var lab=(tr.querySelector('.m-lab').value||'Case').trim();
+    var naR=(tr.querySelector('.m-na').value||'').trim(),nbR=(tr.querySelector('.m-nb').value||'').trim(),tauR=(tr.querySelector('.m-tau').value||'').trim();
+    if(naR===''&&nbR===''&&tauR==='')return;
+    var na=parseFloat(naR),nb=parseFloat(nbR),tau=parseFloat(tauR),reasons=[];
+    if(!(isFinite(na)&&na>=2)||!(isFinite(nb)&&nb>=2))reasons.push('baseline and intervention n must each be at least 2');
+    if(!(isFinite(tau)&&tau>=-1&&tau<=1))reasons.push('Tau-U must be a number between \u22121 and 1');
+    if(reasons.length)skipped.push({label:lab,reason:reasons.join('; ')});
+    else valid.push({label:lab,na:na,nb:nb,tau:tau});
+  });return {valid:valid,skipped:skipped};
+}
+function metaEsc(s){return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function renderMeta(){
+  var rr=metaReadRows(),rows=rr.valid,out=document.getElementById('meta-results');
+  var warn='';
+  if(rr.skipped.length){warn='<div class="wbox" style="background:#FDECEC;border-left:4px solid #b23c3c;color:#7a2020">Skipped '+rr.skipped.length+' case'+(rr.skipped.length>1?'s':'')+': '+rr.skipped.map(function(s){return metaEsc(s.label)+' ('+s.reason+')';}).join('; ')+'.</div>';}
+  if(rows.length<2){out.innerHTML=warn+'<div class="wbox">Enter at least two complete cases (baseline n, intervention n, and Tau-U each) to pool.</div>';document.getElementById('meta-forest-wrap').style.display='none';return;}
+  var sumS=0,sumPairs=0,sumVar=0;
+  rows.forEach(function(r){
+    var pairs=r.na*r.nb,S=r.tau*pairs,vS=r.na*r.nb*(r.na+r.nb+1)/3;
+    r.pairs=pairs;r.S=S;r.se=Math.sqrt(vS)/pairs;
+    r.lo=Math.max(-1,r.tau-1.96*r.se);r.hi=Math.min(1,r.tau+1.96*r.se);
+    sumS+=S;sumPairs+=pairs;sumVar+=vS;
+  });
+  var pooled=sumS/sumPairs,sePooled=Math.sqrt(sumVar)/sumPairs,z=sumS/Math.sqrt(sumVar),p=zToP2(z);
+  var lo=Math.max(-1,pooled-1.96*sePooled),hi=Math.min(1,pooled+1.96*sePooled);
+  var html='<table class="dt"><thead><tr><th>Case</th><th>n (A, B)</th><th>Tau-U</th><th>95% CI</th></tr></thead><tbody>';
+  rows.forEach(function(r){html+='<tr><td>'+metaEsc(r.label)+'</td><td>'+r.na+', '+r.nb+'</td><td>'+r.tau.toFixed(3)+'</td><td>['+r.lo.toFixed(2)+', '+r.hi.toFixed(2)+']</td></tr>';});
+  html+='<tr style="font-weight:bold;background:#eef5f6"><td>Pooled ('+rows.length+' cases)</td><td>&mdash;</td><td>'+pooled.toFixed(3)+'</td><td>['+lo.toFixed(2)+', '+hi.toFixed(2)+']</td></tr></tbody></table>';
+  html+='<div class="info" style="margin-top:10px">Pooled Tau-U = <strong>'+pooled.toFixed(3)+'</strong>, 95% CI ['+lo.toFixed(2)+', '+hi.toFixed(2)+'], z = '+z.toFixed(2)+', p = '+fmtP(p)+'. Weighted by each case\'s number of A-vs-B comparisons.</div>';
+  out.innerHTML=warn+html;
+  metaLast={rows:rows,pooled:{tau:pooled,lo:lo,hi:hi}};
+  document.getElementById('meta-forest-wrap').style.display='';
+  drawForest(rows,{tau:pooled,lo:lo,hi:hi});
+}
+function drawForest(rows,pooled){
+  var canvas=document.getElementById('meta-forest');if(!canvas)return;
+  var wrap=document.getElementById('meta-forest-wrap');
+  var W=Math.max((wrap&&wrap.clientWidth)||canvas.offsetWidth||780,560);
+  var title=(document.getElementById('meta-title')&&document.getElementById('meta-title').value.trim())||'';
+  var rowH=34,top=(title?60:34),H=top+rows.length*rowH+74;
+  var c=canvas.getContext('2d');
+  canvas.width=W*devicePixelRatio;canvas.height=H*devicePixelRatio;canvas.style.width=W+'px';canvas.style.height=H+'px';
+  c.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);c.clearRect(0,0,W,H);
+  if(title){c.fillStyle='#0b4c50';c.font='bold 16px sans-serif';c.textAlign='center';c.fillText(title,W/2,28);}
+  var mgL=160,mgR=190,plotW=W-mgL-mgR,xmin=-1,xmax=1;
+  var toX=function(v){return mgL+(v-xmin)/(xmax-xmin)*plotW;};
+  var axisY=top+rows.length*rowH+8;
+  c.fillStyle='#0b4c50';c.font='bold 12px sans-serif';c.textAlign='left';c.fillText('Case',12,top-14);
+  c.textAlign='right';c.fillText('Tau-U [95% CI]',W-10,top-14);
+  [-1,-0.5,0,0.5,1].forEach(function(t){var x=toX(t);c.strokeStyle=(t===0?'#b6c2c7':'#eef1f2');c.lineWidth=(t===0?1.2:0.6);c.beginPath();c.moveTo(x,top-8);c.lineTo(x,axisY);c.stroke();c.fillStyle='#64727a';c.font='11px sans-serif';c.textAlign='center';c.fillText(t.toFixed(1),x,axisY+17);});
+  rows.forEach(function(r,i){
+    var y=top+i*rowH+rowH/2;
+    c.fillStyle='#12343a';c.font='12px sans-serif';c.textAlign='left';c.fillText(r.label.length>22?r.label.slice(0,21)+'\u2026':r.label,12,y+4);
+    c.strokeStyle='#1a6a8a';c.lineWidth=2;c.beginPath();c.moveTo(toX(r.lo),y);c.lineTo(toX(r.hi),y);c.stroke();
+    c.beginPath();c.moveTo(toX(r.lo),y-4);c.lineTo(toX(r.lo),y+4);c.moveTo(toX(r.hi),y-4);c.lineTo(toX(r.hi),y+4);c.stroke();
+    c.fillStyle='#0d7377';c.beginPath();c.arc(toX(r.tau),y,4.5,0,2*Math.PI);c.fill();
+    c.fillStyle='#64727a';c.font='11px sans-serif';c.textAlign='right';c.fillText(r.tau.toFixed(2)+' ['+r.lo.toFixed(2)+', '+r.hi.toFixed(2)+']',W-10,y+4);
+  });
+  var py=axisY+38,d=7;
+  c.fillStyle='#b23c3c';c.beginPath();c.moveTo(toX(pooled.lo),py);c.lineTo(toX(pooled.tau),py-d);c.lineTo(toX(pooled.hi),py);c.lineTo(toX(pooled.tau),py+d);c.closePath();c.fill();
+  c.fillStyle='#0b4c50';c.font='bold 12px sans-serif';c.textAlign='left';c.fillText('Pooled',12,py+4);
+  c.textAlign='right';c.fillText(pooled.tau.toFixed(2)+' ['+pooled.lo.toFixed(2)+', '+pooled.hi.toFixed(2)+']',W-10,py+4);
+  c.fillStyle='#8494a0';c.font='10px sans-serif';c.textAlign='center';c.fillText('\u2190 favors baseline        Tau-U        favors intervention \u2192',mgL+plotW/2,py+26);
+}
+
 </script>
 </body>
 </html>
