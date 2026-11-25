@@ -699,6 +699,8 @@ function binomCoef(n,k){var r=1;for(var i=0;i<k;i++)r=r*(n-i)/(i+1);return r;}
 function binomP(n,k){var p=0,th=binomCoef(n,k)*Math.pow(.5,n);for(var i=0;i<=n;i++){var pr=binomCoef(n,i)*Math.pow(.5,n);if(pr<=th+1e-10)p+=pr;}return Math.min(1,p);}
 // One-tailed upper-tail binomial P(X >= k) for X ~ Binom(n, 0.5)
 function binomUpperTail(n,k){if(k<=0)return 1;var p=0;for(var i=k;i<=n;i++)p+=binomCoef(n,i);return Math.min(1,p*Math.pow(.5,n));}
+// P(X >= k) for X ~ Binomial(n, p) -- used for the SD-band zone test (p = normal tail beyond the band)
+function binomUpperTailP(n,k,p){if(k<=0)return 1;if(k>n)return 0;var s=0;for(var i=k;i<=n;i++)s+=binomCoef(n,i)*Math.pow(p,i)*Math.pow(1-p,n-i);return Math.min(1,s);}
 // Smallest count k such that P(X >= k) <= alpha under Binom(n, 0.5).
 // This is the CDC binomial critical value (Fisher, Kelley & Lomas, 2003).
 function cdcCritical(n,alpha){for(var k=0;k<=n;k++){if(binomUpperTail(n,k)<=alpha)return k;}return n+1;}
@@ -777,7 +779,7 @@ function computeTauU(b,t,dir){
 // Tau-BC (Tarlow, 2017): detrend by the baseline Theil-Sen line, then compute non-overlap Tau on residuals.
 // Matches SingleCaseES::Tau_BC default (always corrects; non-Kendall Tau).
 function tauBC(A,B,dir){
-  var m=A.length,n=B.length;if(m<2||!n)return NaN;
+  var m=A.length,n=B.length;if(m<2||!n)return{tau:NaN,p:null,pRaw:null};
   var slopes=[];for(var i=0;i<m;i++)for(var j=i+1;j<m;j++){slopes.push((A[j]-A[i])/((j+1)-(i+1)));}
   var slope=slopes.length?median(slopes):0;
   var ic=[];for(var i=0;i<m;i++)ic.push(A[i]-(i+1)*slope);var intercept=median(ic);
@@ -785,7 +787,8 @@ function tauBC(A,B,dir){
   var Ba=B.map(function(y,i){return y-intercept-slope*(m+i+1);});
   var con=0,dis=0;
   Aa.forEach(function(a){Ba.forEach(function(v){if(dir==='increase'){if(v>a)con++;else if(v<a)dis++;}else{if(v<a)con++;else if(v>a)dis++;}});});
-  return (con-dis)/(m*n);
+  var S=con-dis,Var=m*n*(m+n+1)/3,z=Var>0?S/Math.sqrt(Var):0,p=zToP2(z);
+  return{tau:S/(m*n),p:fmtP(p),pRaw:p};
 }
 
 // =====================================================================
@@ -1051,14 +1054,14 @@ function tauInterp(tau){var v=Math.abs(parseFloat(tau));if(v>=.75)return{cls:'in
 function renderNodES(){
   if(phaseOrder.length<2){document.getElementById('es-nod-content').innerHTML='<div class="wbox">Need at least 2 phases.</div>';return;}
   var dir=esDirection;
-  var html='<div class="info" style="margin-bottom:9px">Direction: <strong>'+(dir==='increase'?'Increase':'Decrease')+'</strong>. PAND: minimum-removal (Parker et al., 2007). Tau-U: baseline-corrected when the Phase A Mann-Kendall (MK) trend is significant. When the baseline trends significantly, the baseline-corrected Tau-BC (Tarlow, 2017) is preferred &mdash; both are shown below.</div>';
+  var html='<div class="info" style="margin-bottom:9px">Direction: <strong>'+(dir==='increase'?'Increase':'Decrease')+'</strong>. PAND: minimum-removal (Parker et al., 2007). The <strong>Tau (rec.)</strong> column reports the recommended non-overlap index: the uncorrected Tau-U (Parker et al., 2011) when the Phase A Mann-Kendall (MK) baseline trend is not significant, and the fully baseline-corrected Tau-BC (Tarlow, 2017) when it is. The per-comparison breakdown is below the table.</div>';
   html+='<div style="overflow-x:auto"><table class="dt" style="table-layout:fixed;min-width:800px"><thead><tr>'
     +'<th style="width:13%">Comparison</th>'
     +'<th style="width:7%">PND</th><th style="width:11%">PND interp.</th>'
     +'<th style="width:7%">PEM</th><th style="width:11%">PEM interp.</th>'
     +'<th style="width:7%">PAND</th><th style="width:11%">PAND interp.</th>'
     +'<th style="width:7%">NAP</th><th style="width:10%">NAP interp.</th>'
-    +'<th style="width:8%">Tau-U</th><th style="width:10%">Tau-U interp.</th><th style="width:8%">p</th>'
+    +'<th style="width:10%">Tau (rec.)</th><th style="width:9%">interp.</th><th style="width:7%">p</th>'
     +'</tr></thead><tbody>';
   var tauRows=[];
   for(var i=0;i<phaseOrder.length-1;i++){
@@ -1071,25 +1074,26 @@ function renderNodES(){
     var pemPct=(pemN/v2.length*100).toFixed(1);
     var pandPct=computePAND(v1,v2,dir);
     var napV=computeNAP(v1,v2,dir);
-    var tauRes=computeTauU(v1,v2,dir);var tbcV=tauBC(v1,v2,dir);
-    var pi1=nodInterp(pndPct),pi2=nodInterp(pemPct),pi3=nodInterp(pandPct),pi4=napInterp(napV),pi5=tauInterp(tauRes.tau);
+    var tauRes=computeTauU(v1,v2,dir);var tbcV=tauBC(v1,v2,dir);var bSig=tauRes.mk_a_sig,recTau=bSig?tbcV.tau:parseFloat(tauRes.tau),recP=bSig?tbcV.p:tauRes.p,recName=bSig?'Tau-BC':'Tau-U';
+    var pi1=nodInterp(pndPct),pi2=nodInterp(pemPct),pi3=nodInterp(pandPct),pi4=napInterp(napV),pi5=tauInterp(recTau);
     html+='<tr><td>'+(phaseLabelMap[p1]||p1)+' &#8594; '+(phaseLabelMap[p2]||p2)+'</td>'
       +'<td>'+pndPct+'%</td><td class="'+pi1.cls+'">'+pi1.label+'</td>'
       +'<td>'+pemPct+'%</td><td class="'+pi2.cls+'">'+pi2.label+'</td>'
       +'<td>'+pandPct+'%</td><td class="'+pi3.cls+'">'+pi3.label+'</td>'
       +'<td>'+napV.toFixed(3)+'</td><td class="'+pi4.cls+'">'+pi4.label+'</td>'
-      +'<td>'+tauRes.tau+(tauRes.corrected?'*':'')+'</td><td class="'+pi5.cls+'">'+pi5.label+'</td><td>'+tauRes.p+'</td></tr>';
+      +'<td>'+(isFinite(recTau)?recTau.toFixed(3):'n/a')+' <span style="font-size:9px;color:#0d7377;font-weight:600">'+recName+'</span></td><td class="'+pi5.cls+'">'+pi5.label+'</td><td>'+recP+'</td></tr>';
     tauRows.push({l1:phaseLabelMap[p1]||p1,l2:phaseLabelMap[p2]||p2,tauRes:tauRes,tbc:tbcV});
   }
   html+='</tbody></table></div><div style="margin-top:12px">';
   tauRows.forEach(function(row){
     var tr=row.tauRes,sigColor=tr.mk_a_sig?'#c04a2a':'#2a5a2a';
-    html+='<div class="tauu-disclosure"><div class="td-title">Tau-U &mdash; Phase A baseline trend: '+row.l1+' &#8594; '+row.l2+'</div>'
+    var tbcStr=(row.tbc&&isFinite(row.tbc.tau))?row.tbc.tau.toFixed(3):'n/a';
+    html+='<div class="tauu-disclosure"><div class="td-title">Baseline trend &amp; Tau choice: '+row.l1+' &#8594; '+row.l2+'</div>'
       +'<div class="td-grid"><div class="td-cell"><div class="td-lbl">Phase A Tau</div><div class="td-val">'+tr.mk_a_tau+'</div></div>'
       +'<div class="td-cell"><div class="td-lbl">Phase A p (MK)</div><div class="td-val">'+tr.mk_a_p+'</div></div>'
-      +'<div class="td-cell"><div class="td-lbl">Decision</div><div class="td-val" style="font-size:10px;color:'+sigColor+';font-weight:500">'+(tr.mk_a_sig?'Significant &mdash; correction applied*':'Not significant &mdash; no correction')+'</div></div>'
-      +'<div class="td-cell"><div class="td-lbl">Tau-BC (Tarlow)</div><div class="td-val">'+(isFinite(row.tbc)?row.tbc.toFixed(3):'n/a')+'</div></div></div>'
-      +'<div style="font-size:11px;color:#2a3a5a;line-height:1.6">'+(tr.corrected?'Phase A trend is significant (p = '+tr.mk_a_p+'), so Tau-U is baseline-trend corrected. With a significantly trending baseline, <strong>Tau-BC = '+(isFinite(row.tbc)?row.tbc.toFixed(3):'n/a')+' (Tarlow 2017) is the preferred index</strong> &mdash; it detrends the baseline with Theil-Sen regression, then computes non-overlap.':'No significant Phase A trend (p = '+tr.mk_a_p+'). Tau-U = simple between-phase non-overlap. Tau-BC (= '+(isFinite(row.tbc)?row.tbc.toFixed(3):'n/a')+') is shown for reference.')+'</div></div>';
+      +'<div class="td-cell"><div class="td-lbl">Tau-U (Parker)</div><div class="td-val">'+tr.tau+(tr.corrected?'*':'')+'</div></div>'
+      +'<div class="td-cell"><div class="td-lbl">Tau-BC (Tarlow)</div><div class="td-val" style="color:'+(tr.mk_a_sig?'#0b4c50':'#64727a')+'">'+tbcStr+(tr.mk_a_sig?' &#9733;':'')+'</div></div></div>'
+      +'<div style="font-size:11px;color:#2a3a5a;line-height:1.6">'+(tr.mk_a_sig?'Phase A trend is <strong>significant</strong> (p = '+tr.mk_a_p+'). The two indices correct for it differently: <strong>Tau-U = '+tr.tau+'</strong> (Parker) is a <em>partial</em> correction &mdash; it subtracts only the baseline rank-trend; <strong>Tau-BC = '+tbcStr+'</strong> (Tarlow) is a <em>full</em> correction &mdash; it detrends the baseline by Theil-Sen regression before computing non-overlap. For a significantly trending baseline, <strong>report Tau-BC</strong> &#9733; &mdash; that is the value shown in the table above.':'No significant Phase A trend (p = '+tr.mk_a_p+'), so no baseline correction is needed. The table reports the uncorrected <strong>Tau-U = '+tr.tau+'</strong>. Tau-BC (= '+tbcStr+') is shown only for reference.')+'</div></div>';
   });
   html+='</div><div class="info" style="margin-top:9px"><strong>* baseline-trend corrected</strong><br><br>'
     +'<strong>Interpretation (PND, PEM, PAND):</strong> &ge;90% large &middot; 70&ndash;89% moderate &middot; 50&ndash;69% small &middot; &lt;50% no effect<br>'
@@ -1396,7 +1400,7 @@ function renderSDBand(){
 function renderSDBandStats(upper,lower,dir,bMean){
   if(!phaseOrder.length){document.getElementById('sdb-stats').innerHTML='';return;}
   var sdMult=document.getElementById('sd-bands').value;
-  var bSD=sd(vals(phaseOrder[0]));
+  var bSD=sd(vals(phaseOrder[0]));var p0=normCDF(-parseFloat(sdMult));
   var html='<div style="font-size:11px;font-weight:500;color:#0d7377;text-transform:uppercase;letter-spacing:.4px;margin-bottom:9px;padding-bottom:5px;border-bottom:0.5px solid #d3dde1">Baseline band values</div>'
     +'<div class="sg" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin-bottom:14px">'
     +'<div class="sc"><div class="lbl">Baseline mean (M)</div><div class="val">'+bMean.toFixed(2)+'</div></div>'
@@ -1406,20 +1410,20 @@ function renderSDBandStats(upper,lower,dir,bMean){
     +'</div>';
   if(phaseOrder.length>=2){
     html+='<div style="font-size:11px;font-weight:500;color:#0d7377;text-transform:uppercase;letter-spacing:.4px;margin-bottom:9px;padding-bottom:5px;border-bottom:0.5px solid #d3dde1">Zone test results</div>'
-    +'<div class="info" style="margin-bottom:9px">Desired zone: '+(dir==='increase'?'above the +'+sdMult+'SD band':'below the &minus;'+sdMult+'SD band')+'. Binomial test H&#8320; = 50%.</div>';
+    +'<div class="info" style="margin-bottom:9px">Desired zone: '+(dir==='increase'?'above the +'+sdMult+'SD band':'below the &minus;'+sdMult+'SD band')+'. Binomial test: are more intervention points in the desired zone than the '+(p0*100).toFixed(1)+'% expected by chance beyond &plusmn;'+sdMult+'SD? (one-tailed, H&#8320; = '+(p0*100).toFixed(1)+'%)</div>';
   for(var i=1;i<phaseOrder.length;i++){
     var p=phaseOrder[i],lbl=phaseLabelMap[p]||p,v=vals(p);if(!v.length)continue;
     var inZone=dir==='increase'?v.filter(function(x){return x>upper;}).length:v.filter(function(x){return x<lower;}).length;
     var pct=(inZone/v.length*100).toFixed(1),notZone=v.length-inZone;
-    var sp=binomP(v.length,Math.min(inZone,notZone));
+    var sp=binomUpperTailP(v.length,inZone,p0);
     var aboveMean=dir==='increase'?v.filter(function(x){return x>bMean;}).length:v.filter(function(x){return x<bMean;}).length;
     html+='<div class="ps"><div class="ph-hdr"><span style="font-size:13px;font-weight:500;color:#0b4c50">Phase '+lbl+'</span><span style="font-size:10px;color:#64727a">(n = '+v.length+')</span></div>'
       +'<div class="sg" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">'
       +'<div class="sc"><div class="lbl">In desired zone</div><div class="val">'+inZone+' / '+v.length+'</div></div>'
       +'<div class="sc"><div class="lbl">% in desired zone</div><div class="val">'+pct+'%</div></div>'
       +'<div class="sc"><div class="lbl">% beyond baseline M</div><div class="val">'+(aboveMean/v.length*100).toFixed(1)+'%</div></div>'
-      +'<div class="sc"><div class="lbl">p (binomial, 2-tail)</div><div class="val" style="font-size:12px">'+fmtP(sp)+'</div></div></div>'
-      +'<div class="rb">'+inZone+' of '+v.length+' ('+pct+'%) in desired zone. Binomial: <span class="'+(sp<.05?'sig':'ns')+'">'+(sp<.05?'significant':'not significant')+'</span> ('+fmtPF(sp)+').</div></div>';
+      +'<div class="sc"><div class="lbl">p (binomial, 1-tail)</div><div class="val" style="font-size:12px">'+fmtP(sp)+'</div></div></div>'
+      +'<div class="rb">'+inZone+' of '+v.length+' ('+pct+'%) in the desired zone vs '+(p0*100).toFixed(1)+'% expected by chance. Binomial (1-tailed): <span class="'+(sp<.05?'sig':'ns')+'">'+(sp<.05?'significantly more than chance':'not significant')+'</span> ('+fmtPF(sp)+').</div></div>';
   }
   }
   document.getElementById('sdb-stats').innerHTML=html;
